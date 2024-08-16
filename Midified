@@ -1,0 +1,279 @@
+Here's the complete code, incorporating all the updates and removing hardcoded paths. This includes the updated `config.py`, `parser.py`, `utils.py`, and `run.py`. 
+
+### `src/config.py`
+
+```python
+import re
+import xml.etree.ElementTree as ET
+from collections import defaultdict
+
+class Config:
+    def __init__(self, app_props_file, env_props_file, test_data_dir):
+        self.application_properties_file = app_props_file
+        self.environment_properties_file = env_props_file
+        self.test_data_dir = test_data_dir
+        self.output_properties_file = 'output_properties.properties'
+        self.missing_properties_file = 'missing_properties.properties'
+        self.environment_op_properties_file = 'environment_op.properties'
+
+    def extract_variables(self, file_path):
+        variables = defaultdict(set)
+        try:
+            with open(file_path, 'r') as f:
+                for line in f:
+                    match = re.match(r'.*=\${(\w+)}', line)
+                    if match:
+                        key = match.group(1)
+                        variables[key] = set()
+        except FileNotFoundError:
+            print(f"File not found: {file_path}")
+        return variables
+
+    def search_in_xml(self, file_path, variables):
+        try:
+            tree = ET.parse(file_path)
+            root = tree.getroot()
+            for prop in root.findall('.//property'):
+                name_elem = prop.find('name')
+                value_elem = prop.find('value')
+                if name_elem is not None and value_elem is not None:
+                    name = name_elem.text
+                    value = value_elem.text
+                    if name in variables:
+                        variables[name].add(value)
+        except Exception as e:
+            print(f"Error processing XML file {file_path}: {e}")
+        return variables
+
+    def search_in_properties(self, file_path, variables):
+        try:
+            with open(file_path, 'r') as f:
+                for line in f:
+                    if '=' in line:
+                        key, value = line.split('=', 1)
+                        key = key.strip()
+                        value = value.strip()
+                        if key in variables:
+                            variables[key].add(value)
+        except FileNotFoundError:
+            print(f"File not found: {file_path}")
+        return variables
+
+    def extract_properties(self, file_path):
+        properties = {}
+        try:
+            with open(file_path, 'r') as f:
+                for line in f:
+                    if '=' in line:
+                        key, value = line.split('=', 1)
+                        properties[key.strip()] = value.strip()
+        except FileNotFoundError:
+            print(f"File not found: {file_path}")
+        return properties
+
+    def compare_and_write_differences(self, app_vars_file, env_props_file, output_file):
+        app_vars = self.extract_variables(app_vars_file)
+        env_props = self.extract_properties(env_props_file)
+        
+        app_keys = set(app_vars.keys())
+        env_keys = set(env_props.keys())
+
+        differences = {}
+        
+        missing_in_env = app_keys - env_keys
+        for key in missing_in_env:
+            differences[key] = 'MISSING (not found in env)'
+
+        extra_in_env = env_keys - app_keys
+        for key in extra_in_env:
+            differences[key] = f'{env_props[key]} (not found in app)'
+
+        with open(output_file, 'w') as f:
+            for key, value in differences.items():
+                f.write(f'{key}={value}\n')
+```
+
+### `src/parser.py`
+
+```python
+import glob
+from .config import Config
+from .utils import Utils
+
+class Parser:
+    def __init__(self, config: Config):
+        self.config = config
+        self.utils = Utils()
+
+    def print_key_value_pairs(self):
+        variables = self.config.extract_variables(self.config.application_properties_file)
+
+        # Search for variable values in all XML files
+        for file_name in glob.glob(f"{self.config.test_data_dir}/*.xml"):
+            variables = self.config.search_in_xml(file_name, variables)
+
+        # Search for variable values in environment.properties
+        variables = self.config.search_in_properties(self.config.environment_properties_file, variables)
+
+        for key, values in variables.items():
+            print(f'{key}={",".join(values)}')
+
+    def write_output_properties(self):
+        variables = self.config.extract_variables(self.config.application_properties_file)
+
+        # Search for variable values in all XML files
+        for file_name in glob.glob(f"{self.config.test_data_dir}/*.xml"):
+            variables = self.config.search_in_xml(file_name, variables)
+
+        # Search for variable values in environment.properties
+        variables = self.config.search_in_properties(self.config.environment_properties_file, variables)
+
+        # Write found variables to output_properties.properties
+        with open(self.config.output_properties_file, 'w') as f:
+            for key, values in variables.items():
+                for value in values:
+                    f.write(f'{key}={value}\n')
+
+    def write_missing_properties(self):
+        variables = self.config.extract_variables(self.config.application_properties_file)
+
+        # Search for variable values in all XML files
+        for file_name in glob.glob(f"{self.config.test_data_dir}/*.xml"):
+            variables = self.config.search_in_xml(file_name, variables)
+
+        # Search for variable values in environment.properties
+        variables = self.config.search_in_properties(self.config.environment_properties_file, variables)
+
+        # Get all missing variables
+        with open(self.config.missing_properties_file, 'w') as f:
+            for key, values in variables.items():
+                if not values:
+                    f.write(f'{key}=MISSING\n')
+
+    def compare_and_write_differences_main(self):
+        self.utils.compare_and_write_differences(
+            self.config.application_properties_file,
+            self.config.environment_properties_file,
+            self.config.environment_op_properties_file
+        )
+```
+
+### `src/utils.py`
+
+```python
+from collections import defaultdict
+import re
+
+class Utils:
+    def extract_properties(self, file_path):
+        properties = {}
+        try:
+            with open(file_path, 'r') as f:
+                for line in f:
+                    if '=' in line:
+                        key, value = line.split('=', 1)
+                        properties[key.strip()] = value.strip()
+        except FileNotFoundError:
+            print(f"File not found: {file_path}")
+        return properties
+
+    def extract_variables(self, file_path):
+        variables = defaultdict(set)
+        try:
+            with open(file_path, 'r') as f:
+                for line in f:
+                    match = re.match(r'.*=\${(\w+)}', line)
+                    if match:
+                        key = match.group(1)
+                        variables[key] = set()
+        except FileNotFoundError:
+            print(f"File not found: {file_path}")
+        return variables
+
+    def compare_and_write_differences(self, app_vars_file, env_props_file, output_file):
+        app_vars = self.extract_variables(app_vars_file)
+        env_props = self.extract_properties(env_props_file)
+
+        app_keys = set(app_vars.keys())
+        env_keys = set(env_props.keys())
+
+        differences = {}
+
+        missing_in_env = app_keys - env_keys
+        for key in missing_in_env:
+            differences[key] = 'MISSING (not found in env)'
+
+        extra_in_env = env_keys - app_keys
+        for key in extra_in_env:
+            differences[key] = f'{env_props[key]} (not found in app)'
+
+        with open(output_file, 'w') as f:
+            for key, value in differences.items():
+                f.write(f'{key}={value}\n')
+```
+
+### `src/run.py`
+
+```python
+import sys
+from src.config import Config
+from src.parser import Parser
+from src.parser1 import parseProperties, findDifferences
+
+def main():
+    if len(sys.argv) != 4:
+        print("Usage: run.py <application_properties_path> <environment_properties_path> <test_data_dir>")
+        sys.exit(1)
+
+    app_props_path = sys.argv[1]
+    env_props_path = sys.argv[2]
+    test_data_dir = sys.argv[3]
+
+    config = Config(
+        app_props_file=app_props_path,
+        env_props_file=env_props_path,
+        test_data_dir=test_data_dir
+    )
+    
+    parser = Parser(config)
+
+    option = input("Enter option (1-7): ")
+
+    if option == "1":
+        parser.print_key_value_pairs()
+    elif option == "2":
+        parser.write_output_properties()
+    elif option == "3":
+        parser.write_missing_properties()
+    elif option == "4":
+        parser.compare_and_write_differences_main()
+    elif option == "5":
+        properties = parseProperties(config.output_properties_file)
+        for prop in properties:
+            print(f"Key: {prop.key}, Value: {prop.value}, Placeholders: {prop.placeholderList}")
+    elif option == "6":
+        properties = parseProperties(config.output_properties_file)
+        with open("model.properties", "w") as file:
+            for prop in properties:
+                file.write(f"{prop.key}: {prop.value}, Placeholders: {prop.placeholderList}\n")
+        print("model.properties file has been created with the parsed content.")
+    elif option == "7":
+        properties1 = parseProperties(config.output_properties_file)
+        properties2 = parseProperties(config.environment_properties_file)
+
+        differences = findDifferences(properties1, properties2)
+        if differences:
+            print("Differences found:")
+            for difference in differences:
+                print(difference)
+        else:
+            print("No differences found.")
+    else:
+        print("Invalid option")
+        sys.exit(1)
+
+if __name__ == '__main__':
+    main()
+```
+
+This setup ensures that paths for configuration files and directories are passed as command-line arguments to `run.py`, which then uses these paths to instantiate the `Config`
